@@ -25,12 +25,12 @@ namespace Mash.AppSettings
         {
             if (settingLoader == null)
             {
-                throw new ArgumentNullException("settingLoader");
+                throw new ArgumentNullException(nameof(settingLoader));
             }
 
             if (settingsClass == null)
             {
-                throw new ArgumentNullException("settingsClass");
+                throw new ArgumentNullException(nameof(settingsClass));
             }
 
             var members = typeof(T).FindMembers(
@@ -52,27 +52,36 @@ namespace Mash.AppSettings
                     settingName = attr.Key;
                 }
 
-                Trace.TraceInformation($"Loading class member [{member.Name}] as [{settingName}]");
+                Trace.TraceInformation($"Loading class member [{member.Name}] as [{settingName}].");
 
                 if (!member.CanWrite)
                 {
-                    Trace.TraceWarning($"Property {settingsClass.GetType()}.{member.Name} is not writeable; skipping");
+                    Trace.TraceWarning($"Property [{settingsClass.GetType()}.{member.Name}] is not writeable; skipping.");
                     continue;
                 }
 
                 try
                 {
-                    if (IsValidConnectionStringDictionary(member))
+                    // Check if the property is meant to load all of the connection strings
+                    if (IsSupportedConnectionStringsType(member))
                     {
+                        Trace.TraceInformation($"Loading all connection strings into [{member.Name}].");
                         member.SetValue(settingsClass, settingLoader.GetConnectionStrings());
                         continue;
                     }
 
+                    // Check if the property is meant to load a specific connection string
                     if (IsConnectionStringSettingType(member))
                     {
+                        Trace.TraceInformation($"Loading connection string into [{member.Name}].");
                         var loadedConnectionString = settingLoader.GetConnectionString(settingName);
                         if (!CheckIfSettingIsValid(loadedConnectionString, settingName))
                         {
+                            if (IsSettingRequired(member))
+                            {
+                                exceptions.Add(new ArgumentException("The connection string could not be found.", settingName));
+                            }
+
                             continue;
                         }
 
@@ -82,9 +91,15 @@ namespace Mash.AppSettings
                         continue;
                     }
 
+                    // Load normal setting types
                     var loadedSetting = settingLoader.GetSetting(settingName);
                     if (!CheckIfSettingIsValid(loadedSetting, settingName))
                     {
+                        if (IsSettingRequired(member))
+                        {
+                            exceptions.Add(new ArgumentException("The setting could not be found.", settingName));
+                        }
+
                         continue;
                     }
 
@@ -93,7 +108,7 @@ namespace Mash.AppSettings
                 }
                 catch (Exception ex)
                 {
-                    Trace.TraceError($"Loading setting {settingName} failed with {ex}");
+                    Trace.TraceError($"Loading of setting [{settingName}] failed with:\r\n{ex}.");
                     exceptions.Add(ex);
                 }
             }
@@ -101,7 +116,7 @@ namespace Mash.AppSettings
             if (exceptions.Any())
             {
                 throw new AggregateException(
-                    $"{exceptions.Count} errors loading settings",
+                    $"{exceptions.Count} errors loading settings.",
                     exceptions);
             }
 
@@ -118,23 +133,8 @@ namespace Mash.AppSettings
             return mi.GetCustomAttribute<AppSettingAttribute>() != null;
         }
 
-        private static bool IsConnectionStringSettingType(PropertyInfo member)
+        private static bool IsSupportedConnectionStringsType(PropertyInfo member)
         {
-            var customAttribute = member.GetCustomAttribute<AppSettingAttribute>();
-
-            if (customAttribute != null &&
-                customAttribute.SettingType == SettingType.Connectionstring)
-            {
-                return true;
-            }
-
-            return false;
-        }
-
-        private static bool IsValidConnectionStringDictionary(PropertyInfo member)
-        {
-            var customAttribute = member.GetCustomAttribute<AppSettingAttribute>();
-
             if (IsConnectionStringSettingType(member) &&
                 member.PropertyType == typeof(IReadOnlyDictionary<string, string>))
             {
@@ -144,11 +144,25 @@ namespace Mash.AppSettings
             return false;
         }
 
+        private static bool IsConnectionStringSettingType(PropertyInfo member)
+        {
+            var customAttribute = member.GetCustomAttribute<AppSettingAttribute>();
+
+            return customAttribute?.SettingType == SettingType.Connectionstring;
+        }
+
+        private static bool IsSettingRequired(PropertyInfo member)
+        {
+            var customAttribute = member.GetCustomAttribute<AppSettingAttribute>();
+
+            return customAttribute?.Optional == true;
+        }
+
         private static bool CheckIfSettingIsValid(string loadedValue, string settingName)
         {
             if (String.IsNullOrEmpty(loadedValue))
             {
-                Trace.TraceWarning($"No value found for {settingName}");
+                Trace.TraceWarning($"No value found for [{settingName}].");
                 return false;
             }
 
